@@ -1,0 +1,132 @@
+// Inventário Familiar: Prisma models mapped onto the tables owned by
+// scripts/init.sql (plain SQL, no migrations tooling required).
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model InvMember {
+  id           String   @id @default(cuid())
+  name         String
+  phone        String   @unique // digits only, with country code: 5511987654321
+  role         String   @default("HEIR") // HEIR | LAWYER
+  active       Boolean  @default(true)
+  passwordHash String? // null = 1º acesso pendente (OTP) → obriga a criar senha
+  blocked      Boolean  @default(false) // true = bloqueado por reset de senha
+  sessionEpoch Int      @default(0) // bump invalida todas as sessões JWT
+  pixKey       String? // chave PIX para receber repasses (null = pendente)
+  createdAt    DateTime @default(now())
+  otps         InvOtp[]
+  shares       InvShare[]
+  repasses     InvRepasse[]
+
+  @@map("inventario_members")
+}
+
+model InvOtp {
+  id         String    @id @default(cuid())
+  memberId   String
+  codeHash   String
+  expiresAt  DateTime
+  consumedAt DateTime?
+  attempts   Int       @default(0)
+  createdAt  DateTime  @default(now())
+  member     InvMember @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([memberId])
+  @@map("inventario_otps")
+}
+
+model InvDocument {
+  id             String   @id @default(cuid())
+  filename       String
+  mimeType       String
+  size           Int      @default(0)
+  s3Key          String?
+  data           String? // base64 (fallback sem S3)
+  uploadedById   String? // null = admin (owner)
+  uploadedByName String   @default("Admin")
+  createdAt      DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("inventario_documents")
+}
+
+model InvReceita {
+  id         String   @id @default(cuid())
+  descricao  String
+  grossCents Int
+  receivedAt DateTime
+  createdAt  DateTime @default(now())
+  shares     InvShare[]
+  repasses   InvRepasse[]
+  despesas   InvDespesa[]
+
+  @@index([receivedAt])
+  @@map("inventario_receitas")
+}
+
+// Despesa do inventário (custas, taxas…): desconta da entrada do MESMO MÊS
+// do vencimento, tal como os 5% do advogado. receitaId = onde foi descontada
+// (null = pendente, compõe o próximo lançamento do mês).
+model InvDespesa {
+  id          String      @id @default(cuid())
+  descricao   String
+  amountCents Int
+  dueAt       DateTime // data de vencimento
+  receitaId   String?
+  createdAt   DateTime    @default(now())
+  receita     InvReceita? @relation(fields: [receitaId], references: [id], onDelete: SetNull)
+
+  @@index([dueAt])
+  @@index([receitaId])
+  @@map("inventario_despesas")
+}
+
+model InvShare {
+  id          String     @id @default(cuid())
+  receitaId   String
+  memberId    String
+  kind        String // HEIR_SHARE | LAWYER_FEE
+  amountCents Int
+  createdAt   DateTime   @default(now())
+  receita     InvReceita @relation(fields: [receitaId], references: [id], onDelete: Cascade)
+  member      InvMember  @relation(fields: [memberId], references: [id], onDelete: Cascade)
+
+  @@index([receitaId])
+  @@index([memberId])
+  @@map("inventario_shares")
+}
+
+model InvRepasse {
+  id          String      @id @default(cuid())
+  memberId    String
+  receitaId   String?
+  amountCents Int
+  paidAt      DateTime
+  nota        String?
+  createdAt   DateTime    @default(now())
+  member      InvMember   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  receita     InvReceita? @relation(fields: [receitaId], references: [id], onDelete: SetNull)
+
+  @@index([memberId])
+  @@map("inventario_repasses")
+}
+
+model InvAccessLog {
+  id        String   @id @default(cuid())
+  memberId  String? // null = admin (owner)
+  actor     String
+  action    String
+  detail    String?
+  ip        String?
+  userAgent String?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@map("inventario_access_log")
+}

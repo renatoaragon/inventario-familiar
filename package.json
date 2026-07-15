@@ -1,0 +1,34 @@
+{
+  "name": "inventario-familiar",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Self-hosted family estate portal: shared documents, automatic income splitting (lawyer fee + equal heir shares + monthly expenses), individual statements and a full audit log.",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "db:init": "psql \"$DATABASE_URL\" -f scripts/init.sql",
+    "db:seed-demo": "psql \"$DATABASE_URL\" -f scripts/seed-demo.sql",
+    "postinstall": "prisma generate"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.19.3",
+    "bcryptjs": "^2.4.3",
+    "jose": "^5.9.6",
+    "next": "16.2.4",
+    "react": "19.2.4",
+    "react-dom": "19.2.4"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4",
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "prisma": "^6.19.3",
+    "tailwindcss": "^4",
+    "typescript": "^5",
+    "vitest": "^4"
+  }
+}
