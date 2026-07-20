@@ -50,10 +50,31 @@ model InvDocument {
   data           String? // base64 (fallback sem S3)
   uploadedById   String? // null = admin (owner)
   uploadedByName String   @default("Admin")
+  timelineId     String? // attachment of a timeline milestone (null = standalone)
   createdAt      DateTime @default(now())
+  timeline       InvTimeline? @relation(fields: [timelineId], references: [id], onDelete: SetNull)
 
   @@index([createdAt])
+  @@index([timelineId])
   @@map("inventario_documents")
+}
+
+// Estate timeline, presented as a workflow. occurredAt is the OFFICIAL date of
+// the event (chosen by whoever records it), independent of createdAt. Only the
+// admin writes; every member reads. Attachments = InvDocument.timelineId.
+model InvTimeline {
+  id            String    @id @default(cuid())
+  title         String
+  body          String? // free text (context, notes)
+  kind          String    @default("MARCO") // MARCO | DOCUMENTO | DECISAO | PRAZO | FINANCEIRO | ALERTA
+  occurredAt    DateTime // official date of the event
+  createdByName String    @default("Admin")
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime?
+  documents     InvDocument[]
+
+  @@index([occurredAt])
+  @@map("inventario_timeline")
 }
 
 model InvReceita {
