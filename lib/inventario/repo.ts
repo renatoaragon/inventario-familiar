@@ -357,6 +357,79 @@ export async function getExtrato(memberId: string) {
   };
 }
 
+// ── Timeline ────────────────────────────────────────────────────────
+export const TIMELINE_KINDS = [
+  "MARCO",
+  "DOCUMENTO",
+  "DECISAO",
+  "PRAZO",
+  "FINANCEIRO",
+  "ALERTA",
+] as const;
+
+export function isTimelineKind(v: unknown): v is (typeof TIMELINE_KINDS)[number] {
+  return typeof v === "string" && (TIMELINE_KINDS as readonly string[]).includes(v);
+}
+
+/**
+ * Milestones in chronological order (occurredAt ASC): the portal draws the
+ * workflow top to bottom. Same-day ties break by insertion order. Each entry
+ * carries its attachments; only metadata leaves here, never the binary.
+ */
+export async function listTimeline() {
+  const rows = await prisma.invTimeline.findMany({
+    include: {
+      documents: {
+        select: { id: true, filename: true, mimeType: true, size: true, createdAt: true },
+        orderBy: { createdAt: "asc" },
+      },
+    },
+    orderBy: [{ occurredAt: "asc" }, { createdAt: "asc" }],
+  });
+  return rows.map((t) => ({
+    id: t.id,
+    title: t.title,
+    body: t.body,
+    kind: t.kind,
+    occurredAt: t.occurredAt.toISOString(),
+    createdByName: t.createdByName,
+    createdAt: t.createdAt.toISOString(),
+    updatedAt: t.updatedAt?.toISOString() ?? null,
+    documents: t.documents.map((d) => ({
+      id: d.id,
+      filename: d.filename,
+      mimeType: d.mimeType,
+      size: d.size,
+      createdAt: d.createdAt.toISOString(),
+    })),
+  }));
+}
+
+export async function createTimelineEntry(data: {
+  title: string;
+  body: string | null;
+  kind: string;
+  occurredAt: Date;
+  createdByName: string;
+}) {
+  return prisma.invTimeline.create({ data });
+}
+
+export async function updateTimelineEntry(
+  id: string,
+  data: { title: string; body: string | null; kind: string; occurredAt: Date },
+) {
+  return prisma.invTimeline.update({ data: { ...data, updatedAt: new Date() }, where: { id } });
+}
+
+/** Drops the milestone; attachments survive as standalone documents (FK SET NULL). */
+export async function deleteTimelineEntry(id: string): Promise<{ title: string } | null> {
+  const entry = await prisma.invTimeline.findUnique({ where: { id }, select: { title: true } });
+  if (!entry) return null;
+  await prisma.invTimeline.delete({ where: { id } });
+  return entry;
+}
+
 // ── Admin dashboard ─────────────────────────────────────────────────
 /** Monthly series of gross income and fees, plus balance per member. */
 export async function getSummary() {

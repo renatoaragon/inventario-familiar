@@ -16,6 +16,29 @@ function buildKey(docId: string, fileName: string): string {
   return `inventario/${docId}/${safe}`;
 }
 
+/**
+ * Resolves the optional "timelineId" field of an upload. Since only the admin
+ * writes to the timeline, only the admin may attach to it — otherwise a member
+ * would be editing admin content. Returns the id, null when absent, or the
+ * Response the caller must return.
+ */
+async function resolveTimelineId(
+  raw: FormDataEntryValue | null | undefined,
+  isAdmin: boolean,
+): Promise<string | null | Response> {
+  const timelineId = typeof raw === "string" && raw ? raw : null;
+  if (!timelineId) return null;
+  if (!isAdmin) {
+    return Response.json({ message: "Só o admin anexa na linha do tempo." }, { status: 403 });
+  }
+  const exists = await prisma.invTimeline.findUnique({
+    where: { id: timelineId },
+    select: { id: true },
+  });
+  if (!exists) return Response.json({ message: "Marco não encontrado." }, { status: 404 });
+  return timelineId;
+}
+
 export async function GET() {
   const s = await requireInv();
   if (s instanceof Response) return s;
@@ -23,7 +46,7 @@ export async function GET() {
   const rows = await prisma.invDocument.findMany({
     select: {
       id: true, filename: true, mimeType: true, size: true,
-      uploadedByName: true, createdAt: true,
+      uploadedByName: true, timelineId: true, createdAt: true,
     },
     orderBy: { createdAt: "desc" },
   });
@@ -41,6 +64,9 @@ export async function POST(request: Request) {
   if (!(file instanceof File)) {
     return Response.json({ message: "Arquivo ausente." }, { status: 400 });
   }
+
+  const timelineId = await resolveTimelineId(form?.get("timelineId"), s.kind === "admin");
+  if (timelineId instanceof Response) return timelineId;
 
   const s3 = isS3Configured();
   const limit = s3 ? MAX_BYTES : 8 * 1024 * 1024;
@@ -81,7 +107,7 @@ export async function POST(request: Request) {
     stored = { data: buf.toString("base64") };
   }
   const doc = await prisma.invDocument.create({
-    data: { filename, mimeType, size: buf.length, ...uploader, ...stored },
+    data: { filename, mimeType, size: buf.length, timelineId, ...uploader, ...stored },
   });
 
   await logAccess({

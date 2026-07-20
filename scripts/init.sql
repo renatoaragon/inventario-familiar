@@ -48,6 +48,39 @@ CREATE TABLE IF NOT EXISTS "inventario_documents" (
 );
 CREATE INDEX IF NOT EXISTS "inventario_documents_createdAt_idx" ON "inventario_documents" ("createdAt");
 
+-- Timeline: relevant milestones of the estate, rendered as a workflow.
+-- "occurredAt" is the OFFICIAL date of the event, chosen by whoever records it;
+-- it is independent of "createdAt" (when the row entered the system). Recording
+-- a July 1st fact today keeps the milestone on July 1st in the view.
+CREATE TABLE IF NOT EXISTS "inventario_timeline" (
+  "id"            TEXT PRIMARY KEY,
+  "title"         TEXT NOT NULL,
+  "body"          TEXT,                          -- free text (context, notes)
+  "kind"          TEXT NOT NULL DEFAULT 'MARCO', -- MARCO | DOCUMENTO | DECISAO | PRAZO | FINANCEIRO | ALERTA
+  "occurredAt"    TIMESTAMP(3) NOT NULL,         -- official date of the event
+  "createdByName" TEXT NOT NULL DEFAULT 'Admin',
+  "createdAt"     TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  "updatedAt"     TIMESTAMP(3)
+);
+CREATE INDEX IF NOT EXISTS "inventario_timeline_occurredAt_idx" ON "inventario_timeline" ("occurredAt");
+
+-- Timeline attachments are ordinary documents carrying a "timelineId": a single
+-- source of truth, so the same file shows up both in the timeline and in the
+-- documents tab. ON DELETE SET NULL: dropping a milestone detaches the files
+-- instead of deleting them.
+ALTER TABLE "inventario_documents" ADD COLUMN IF NOT EXISTS "timelineId" TEXT;
+CREATE INDEX IF NOT EXISTS "inventario_documents_timelineId_idx" ON "inventario_documents" ("timelineId");
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint WHERE conname = 'inventario_documents_timelineId_fkey'
+  ) THEN
+    ALTER TABLE "inventario_documents"
+      ADD CONSTRAINT "inventario_documents_timelineId_fkey"
+      FOREIGN KEY ("timelineId") REFERENCES "inventario_timeline" ("id") ON DELETE SET NULL;
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS "inventario_receitas" (
   "id"         TEXT PRIMARY KEY,
   "descricao"  TEXT NOT NULL,

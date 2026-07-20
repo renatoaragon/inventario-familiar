@@ -14,6 +14,13 @@ heirs who all deserve a clear, individual view of what is theirs.
 
 - **Shared documents**: every member sees all estate documents (any file
   format; S3 storage with a database fallback for small deployments).
+- **Timeline**: the estate's milestones drawn as a workflow. Only the admin
+  records them; everyone reads. The date is the **official date of the event**,
+  not the day it was typed — recording a July 1st fact today keeps it on July
+  1st, and a future date shows up as *planned*. Entries carry free text and
+  attachments, which are ordinary documents (`timelineId`) so the same file
+  appears both here and in the documents tab. Images, PDFs, video, audio and
+  text preview inline, no modal.
 - **Automatic income splitting**: when an income entry (*receita*) is
   registered, the engine takes the lawyer's fee off the top, deducts the
   expenses due that month, and splits the net equally among active heirs.

@@ -14,7 +14,28 @@ type Doc = {
   mimeType: string;
   size: number;
   uploadedByName: string;
+  timelineId: string | null; // attachment of a timeline milestone
   createdAt: string;
+};
+
+type TimelineDoc = {
+  id: string;
+  filename: string;
+  mimeType: string;
+  size: number;
+  createdAt: string;
+};
+
+type TimelineEntry = {
+  id: string;
+  title: string;
+  body: string | null;
+  kind: string;
+  occurredAt: string; // OFFICIAL date of the event (≠ createdAt)
+  createdByName: string;
+  createdAt: string;
+  updatedAt: string | null;
+  documents: TimelineDoc[];
 };
 
 type Member = {
@@ -474,8 +495,15 @@ function Login() {
 }
 
 // ── Portal ──────────────────────────────────────────────────────────
-type AdminTab = "painel" | "extrato" | "lancamentos" | "documentos" | "membros" | "acessos";
-type MemberTab = "documentos" | "extrato";
+type AdminTab =
+  | "painel"
+  | "timeline"
+  | "extrato"
+  | "lancamentos"
+  | "documentos"
+  | "membros"
+  | "acessos";
+type MemberTab = "timeline" | "documentos" | "extrato";
 
 function Portal({ session }: { session: NonNullable<Session> }) {
   const isAdmin = session.kind === "admin";
@@ -625,15 +653,22 @@ function Portal({ session }: { session: NonNullable<Session> }) {
       {/* Navigation */}
       <nav className="mb-6 flex flex-wrap gap-1.5 text-xs font-semibold">
         {memberView ? (
-          (["extrato", "documentos"] as MemberTab[]).map((t) => (
+          (
+            [
+              ["extrato", "💰 Meu extrato"],
+              ["timeline", "🕒 Linha do tempo"],
+              ["documentos", "📁 Documentos"],
+            ] as [MemberTab, string][]
+          ).map(([t, label]) => (
             <TabButton key={t} active={memberTab === t} onClick={() => setMemberTab(t)}>
-              {t === "extrato" ? "💰 Meu extrato" : "📁 Documentos"}
+              {label}
             </TabButton>
           ))
         ) : (
           (
             [
               ["painel", "📈 Painel"],
+              ["timeline", "🕒 Linha do tempo"],
               ["extrato", "💰 Meu extrato"],
               ["lancamentos", "🧾 Lançamentos"],
               ["documentos", "📁 Documentos"],
@@ -652,11 +687,15 @@ function Portal({ session }: { session: NonNullable<Session> }) {
       {memberView ? (
         memberTab === "extrato" ? (
           <ExtratoView viewAsId={viewAs?.id} />
+        ) : memberTab === "timeline" ? (
+          <TimelineView isAdmin={isAdmin && !viewAs} />
         ) : (
           <DocumentsView isAdmin={isAdmin && !viewAs} />
         )
       ) : adminTab === "painel" ? (
         <PainelView />
+      ) : adminTab === "timeline" ? (
+        <TimelineView isAdmin />
       ) : adminTab === "extrato" ? (
         <ExtratoView />
       ) : adminTab === "lancamentos" ? (
@@ -1595,6 +1634,11 @@ function DocumentsView({ isAdmin }: { isAdmin: boolean }) {
               </a>
               <div className="text-[11px] text-slate-400">
                 {fmtSize(d.size)} · enviado por {d.uploadedByName} · {fmtDate(d.createdAt)}
+                {d.timelineId && (
+                  <span className="ml-1.5 rounded border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-700">
+                    🕒 na linha do tempo
+                  </span>
+                )}
               </div>
             </div>
             <a
@@ -1983,6 +2027,631 @@ function MembrosView({ members, reload }: { members: Member[]; reload: () => Pro
   );
 }
 
+// ── Timeline (workflow) ─────────────────────────────────────────────
+// Estate milestones in chronological order by the OFFICIAL date of the event
+// (occurredAt), chosen by whoever records it: entering a July 1st fact today
+// keeps the milestone on July 1st. Only the admin writes; everyone reads.
+// Attachments are ordinary documents (timelineId) and open inline, no modal.
+const TIMELINE_KIND: Record<string, { label: string; icon: string; chip: string; dot: string }> = {
+  MARCO: {
+    label: "Marco processual",
+    icon: "⚖️",
+    chip: "border-indigo-200 bg-indigo-50 text-indigo-800",
+    dot: "border-indigo-300 bg-indigo-50",
+  },
+  DOCUMENTO: {
+    label: "Documento",
+    icon: "📄",
+    chip: "border-slate-200 bg-slate-50 text-slate-700",
+    dot: "border-slate-300 bg-slate-50",
+  },
+  DECISAO: {
+    label: "Decisão",
+    icon: "✅",
+    chip: "border-emerald-200 bg-emerald-50 text-emerald-800",
+    dot: "border-emerald-300 bg-emerald-50",
+  },
+  PRAZO: {
+    label: "Prazo / agenda",
+    icon: "⏳",
+    chip: "border-amber-200 bg-amber-50 text-amber-800",
+    dot: "border-amber-300 bg-amber-50",
+  },
+  FINANCEIRO: {
+    label: "Financeiro",
+    icon: "💰",
+    chip: "border-violet-200 bg-violet-50 text-violet-800",
+    dot: "border-violet-300 bg-violet-50",
+  },
+  ALERTA: {
+    label: "Pendência",
+    icon: "⚠️",
+    chip: "border-rose-200 bg-rose-50 text-rose-800",
+    dot: "border-rose-300 bg-rose-50",
+  },
+};
+const TIMELINE_KIND_KEYS = Object.keys(TIMELINE_KIND);
+const kindOf = (k: string) => TIMELINE_KIND[k] ?? TIMELINE_KIND.MARCO;
+
+// occurredAt is a calendar date stored as UTC midnight: formatting from the UTC
+// fields avoids slipping back a day in timezones west of Greenwich (BR/PT).
+const fmtDayUTC = (iso: string) =>
+  new Date(iso).toLocaleDateString("pt-BR", { day: "2-digit", month: "short", timeZone: "UTC" });
+const fmtFullUTC = (iso: string) =>
+  new Date(iso).toLocaleDateString("pt-BR", {
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+const yearUTC = (iso: string) => new Date(iso).getUTCFullYear();
+const todayISO = () => new Date().toISOString().slice(0, 10);
+/** Milestone dated after today: hasn't happened yet, shows up as "previsto". */
+const isFuture = (iso: string) => iso.slice(0, 10) > todayISO();
+
+function TimelineView({ isAdmin }: { isAdmin: boolean }) {
+  const [entries, setEntries] = useState<TimelineEntry[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [recentFirst, setRecentFirst] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
+  const [editing, setEditing] = useState<TimelineEntry | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const r = await jfetch<{ timeline: TimelineEntry[] }>("/api/inventario/timeline");
+      setEntries(r.timeline);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Erro");
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  /** Attaches files to an existing milestone (one by one, as in Documents). */
+  async function attach(entryId: string, files: File[]) {
+    if (files.length === 0) return;
+    setBusyId(entryId);
+    setErr(null);
+    const failures: string[] = [];
+    for (const file of files) {
+      try {
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("timelineId", entryId);
+        const res = await fetch("/api/inventario/documents", { method: "POST", body: fd });
+        if (!res.ok) {
+          const d = (await res.json().catch(() => ({}))) as { message?: string };
+          throw new Error(d.message ?? "erro no upload");
+        }
+      } catch (e) {
+        failures.push(`${file.name}: ${e instanceof Error ? e.message : "erro"}`);
+      }
+    }
+    await load();
+    setBusyId(null);
+    if (failures.length) setErr(`Falharam ${failures.length} anexo(s): ${failures.join(" · ")}`);
+  }
+
+  async function removeEntry(entry: TimelineEntry) {
+    const aviso = entry.documents.length
+      ? `\n\nOs ${entry.documents.length} anexo(s) NÃO são excluídos: continuam disponíveis em Documentos.`
+      : "";
+    if (!confirm(`Excluir o registro "${entry.title}"?${aviso}`)) return;
+    setBusyId(entry.id);
+    try {
+      await jfetch(`/api/inventario/timeline/${entry.id}`, { method: "DELETE" });
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Erro ao excluir.");
+    }
+    setBusyId(null);
+  }
+
+  async function removeDoc(doc: TimelineDoc) {
+    if (!confirm(`Excluir o anexo "${doc.filename}"? Ele sai também de Documentos.`)) return;
+    await fetch(`/api/inventario/documents/${doc.id}`, { method: "DELETE" });
+    await load();
+  }
+
+  if (err && !entries) return <ErrorBox msg={err} />;
+  if (!entries) return <Loading />;
+
+  const items = recentFirst ? [...entries].reverse() : entries;
+
+  return (
+    <div className="space-y-4">
+      {err && <ErrorBox msg={err} />}
+
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-3">
+        <div>
+          <div className="text-sm font-bold text-slate-800">Linha do tempo do inventário</div>
+          <div className="text-[11px] text-slate-400">
+            {entries.length === 0
+              ? "Nenhum registro ainda"
+              : `${entries.length} registro(s) · do mais antigo ao mais recente`}
+          </div>
+        </div>
+        <div className="ml-auto flex items-center gap-2">
+          {entries.length > 1 && (
+            <button
+              onClick={() => setRecentFirst((v) => !v)}
+              className="rounded-lg border border-slate-200 px-3 py-1.5 text-[11px] font-semibold text-slate-600 transition hover:border-indigo-300 hover:text-indigo-700"
+            >
+              {recentFirst ? "↑ Mais antigos primeiro" : "↓ Mais recentes primeiro"}
+            </button>
+          )}
+          {isAdmin && (
+            <button
+              onClick={() => {
+                setEditing(null);
+                setFormOpen((v) => !v);
+              }}
+              className="rounded-lg bg-slate-900 px-3.5 py-2 text-[11px] font-semibold text-white transition hover:bg-slate-800"
+            >
+              {formOpen && !editing ? "✕ Cancelar" : "+ Novo registro"}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {isAdmin && (formOpen || editing) && (
+        <TimelineForm
+          key={editing?.id ?? "new"}
+          entry={editing}
+          onCancel={() => {
+            setEditing(null);
+            setFormOpen(false);
+          }}
+          onSaved={async () => {
+            setEditing(null);
+            setFormOpen(false);
+            await load();
+          }}
+          onAttach={attach}
+        />
+      )}
+
+      {items.length === 0 ? (
+        <p className="rounded-xl border border-slate-200 bg-white px-4 py-10 text-center text-xs italic text-slate-400">
+          Nenhum acontecimento registrado ainda.
+          {isAdmin && " Use “+ Novo registro” para marcar o primeiro."}
+        </p>
+      ) : (
+        <ol className="space-y-4">
+          {items.map((e, i) => {
+            const prev = items[i - 1];
+            const showYear = !prev || yearUTC(prev.occurredAt) !== yearUTC(e.occurredAt);
+            return (
+              <Fragment key={e.id}>
+                {showYear && (
+                  <li className="flex items-center gap-3 pt-2 first:pt-0">
+                    <span className="text-[11px] font-bold uppercase tracking-[0.15em] text-slate-400">
+                      {yearUTC(e.occurredAt)}
+                    </span>
+                    <span className="h-px flex-1 bg-slate-200" />
+                  </li>
+                )}
+                <TimelineNode
+                  entry={e}
+                  isAdmin={isAdmin}
+                  isLast={i === items.length - 1}
+                  busy={busyId === e.id}
+                  onEdit={() => {
+                    setFormOpen(false);
+                    setEditing(e);
+                  }}
+                  onDelete={() => void removeEntry(e)}
+                  onAttach={(files) => void attach(e.id, files)}
+                  onDeleteDoc={(d) => void removeDoc(d)}
+                />
+              </Fragment>
+            );
+          })}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+/** One workflow node: rail dot plus a card with the text and inline attachments. */
+function TimelineNode({
+  entry,
+  isAdmin,
+  isLast,
+  busy,
+  onEdit,
+  onDelete,
+  onAttach,
+  onDeleteDoc,
+}: {
+  entry: TimelineEntry;
+  isAdmin: boolean;
+  isLast: boolean;
+  busy: boolean;
+  onEdit: () => void;
+  onDelete: () => void;
+  onAttach: (files: File[]) => void;
+  onDeleteDoc: (doc: TimelineDoc) => void;
+}) {
+  const k = kindOf(entry.kind);
+  const futuro = isFuture(entry.occurredAt);
+
+  return (
+    <li className="relative pl-14">
+      {/* Workflow rail: links this node to the next one (the last draws none). */}
+      {!isLast && (
+        <span
+          aria-hidden
+          className="absolute left-[19px] top-11 h-[calc(100%-1.75rem)] w-0.5 bg-slate-200"
+        />
+      )}
+      <span
+        aria-hidden
+        className={`absolute left-0 top-1.5 flex h-10 w-10 items-center justify-center rounded-full border-2 text-base ${k.dot} ${
+          futuro ? "border-dashed" : ""
+        }`}
+      >
+        {k.icon}
+      </span>
+
+      <article
+        className={`rounded-xl border bg-white p-4 ${
+          futuro ? "border-dashed border-slate-300" : "border-slate-200"
+        }`}
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <time
+            dateTime={entry.occurredAt.slice(0, 10)}
+            title={fmtFullUTC(entry.occurredAt)}
+            className="text-sm font-bold tabular-nums text-slate-900"
+          >
+            {fmtDayUTC(entry.occurredAt)}
+          </time>
+          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${k.chip}`}>
+            {k.label}
+          </span>
+          {futuro && (
+            <span className="rounded-full border border-slate-300 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-500">
+              previsto
+            </span>
+          )}
+          {isAdmin && (
+            <span className="ml-auto flex items-center gap-1">
+              <button
+                onClick={onEdit}
+                disabled={busy}
+                className="rounded px-2 py-1 text-[11px] font-semibold text-slate-500 transition hover:bg-slate-50 hover:text-slate-800 disabled:opacity-40"
+              >
+                Editar
+              </button>
+              <button
+                onClick={onDelete}
+                disabled={busy}
+                title="Excluir registro"
+                className="rounded px-2 py-1 text-slate-300 transition hover:bg-rose-50 hover:text-rose-600 disabled:opacity-40"
+              >
+                ✕
+              </button>
+            </span>
+          )}
+        </div>
+
+        <h3 className="mt-1.5 text-sm font-semibold leading-snug text-slate-900">{entry.title}</h3>
+        {entry.body && (
+          <p className="mt-1.5 whitespace-pre-wrap text-xs leading-relaxed text-slate-600">
+            {entry.body}
+          </p>
+        )}
+
+        {entry.documents.length > 0 && (
+          <div className="mt-3 space-y-3">
+            {entry.documents.map((d) => (
+              <Attachment key={d.id} doc={d} isAdmin={isAdmin} onDelete={() => onDeleteDoc(d)} />
+            ))}
+          </div>
+        )}
+
+        <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-slate-100 pt-2.5 text-[10px] text-slate-400">
+          <span>
+            registrado por {entry.createdByName} em {fmtDate(entry.createdAt)}
+            {entry.updatedAt && ` · editado em ${fmtDate(entry.updatedAt)}`}
+          </span>
+          {isAdmin && (
+            <label className="ml-auto cursor-pointer rounded-lg border border-slate-200 px-2.5 py-1 text-[11px] font-semibold text-slate-600 transition hover:border-indigo-300 hover:text-indigo-700">
+              <input
+                type="file"
+                multiple
+                className="hidden"
+                disabled={busy}
+                onChange={(ev) => {
+                  onAttach(Array.from(ev.target.files ?? []));
+                  ev.target.value = "";
+                }}
+              />
+              {busy ? "Enviando…" : "📎 Anexar"}
+            </label>
+          )}
+        </div>
+      </article>
+    </li>
+  );
+}
+
+/** Formats the preview renders as plain text (same list as the route). */
+function isTextLike(mime: string): boolean {
+  return (
+    mime.startsWith("text/") ||
+    mime === "application/json" ||
+    mime === "application/xml" ||
+    mime === "image/svg+xml"
+  );
+}
+
+/**
+ * Attachment with an embedded preview: image, PDF, video, audio and text open
+ * on the page itself (no modal). Formats the browser can't render keep just the
+ * card and the download button.
+ */
+function Attachment({
+  doc,
+  isAdmin,
+  onDelete,
+}: {
+  doc: TimelineDoc;
+  isAdmin: boolean;
+  onDelete: () => void;
+}) {
+  const src = `/api/inventario/documents/${doc.id}?inline=1`;
+  const mime = doc.mimeType;
+  const texto = isTextLike(mime);
+  const [text, setText] = useState<string | null>(null);
+  const [textErr, setTextErr] = useState(false);
+
+  useEffect(() => {
+    if (!texto) return;
+    let alive = true;
+    fetch(src)
+      .then((r) => (r.ok ? r.text() : Promise.reject(new Error("falhou"))))
+      .then((t) => {
+        if (alive) setText(t.slice(0, 20_000)); // trims huge files
+      })
+      .catch(() => {
+        if (alive) setTextErr(true);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [src, texto]);
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-slate-200">
+      <div className="flex items-center gap-2 border-b border-slate-100 bg-slate-50/60 px-3 py-2">
+        <span>{fileIcon(mime)}</span>
+        <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-slate-700">
+          {doc.filename}
+        </span>
+        <span className="text-[10px] tabular-nums text-slate-400">{fmtSize(doc.size)}</span>
+        <a
+          href={`/api/inventario/documents/${doc.id}`}
+          className="rounded border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-semibold text-slate-600 transition hover:border-indigo-300 hover:text-indigo-700"
+        >
+          ⬇ Baixar
+        </a>
+        {isAdmin && (
+          <button
+            onClick={onDelete}
+            title="Excluir anexo"
+            className="rounded px-1.5 py-0.5 text-slate-300 transition hover:bg-rose-50 hover:text-rose-600"
+          >
+            ✕
+          </button>
+        )}
+      </div>
+
+      {mime.startsWith("image/") && !texto ? (
+        // eslint-disable-next-line @next/next/no-img-element -- private content behind a session, no next/image optimization
+        <img
+          src={src}
+          alt={doc.filename}
+          loading="lazy"
+          className="max-h-[420px] w-full bg-slate-50 object-contain"
+        />
+      ) : mime === "application/pdf" ? (
+        <iframe
+          src={src}
+          title={doc.filename}
+          loading="lazy"
+          className="h-[480px] w-full bg-slate-50"
+        />
+      ) : mime.startsWith("video/") ? (
+        <video src={src} controls preload="metadata" className="max-h-[420px] w-full bg-black" />
+      ) : mime.startsWith("audio/") ? (
+        <audio src={src} controls preload="metadata" className="w-full px-3 py-2" />
+      ) : texto ? (
+        textErr ? (
+          <p className="px-3 py-3 text-[11px] italic text-slate-400">
+            Não foi possível carregar a pré-visualização.
+          </p>
+        ) : text === null ? (
+          <p className="px-3 py-3 text-[11px] italic text-slate-400">Carregando…</p>
+        ) : (
+          <pre className="max-h-[320px] overflow-auto whitespace-pre-wrap px-3 py-3 text-[11px] leading-relaxed text-slate-700">
+            {text}
+          </pre>
+        )
+      ) : (
+        <p className="px-3 py-3 text-[11px] italic text-slate-400">
+          Formato sem pré-visualização no navegador — use “Baixar”.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** Create/edit form for a milestone (admin). */
+function TimelineForm({
+  entry,
+  onCancel,
+  onSaved,
+  onAttach,
+}: {
+  entry: TimelineEntry | null;
+  onCancel: () => void;
+  onSaved: () => Promise<void>;
+  onAttach: (entryId: string, files: File[]) => Promise<void>;
+}) {
+  const [occurredAt, setOccurredAt] = useState(entry ? entry.occurredAt.slice(0, 10) : todayISO());
+  const [kind, setKind] = useState(entry?.kind ?? "MARCO");
+  const [title, setTitle] = useState(entry?.title ?? "");
+  const [body, setBody] = useState(entry?.body ?? "");
+  const [files, setFiles] = useState<File[]>([]);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function save() {
+    if (busy || !title.trim() || !occurredAt) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const payload = { title: title.trim(), body: body.trim(), kind, occurredAt };
+      if (entry) {
+        await jfetch(`/api/inventario/timeline/${entry.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (files.length) await onAttach(entry.id, files);
+      } else {
+        // Create first to get the id; only then do attachments have an anchor.
+        const r = await jfetch<{ id: string }>("/api/inventario/timeline", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (files.length) await onAttach(r.id, files);
+      }
+      await onSaved();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Erro ao salvar.");
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        void save();
+      }}
+      className="space-y-3 rounded-xl border border-indigo-200 bg-white p-4"
+    >
+      <div className="text-sm font-bold text-slate-800">
+        {entry ? "Editar registro" : "Novo registro na linha do tempo"}
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-[auto_1fr]">
+        <div>
+          <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+            Data do ocorrido
+          </label>
+          <input
+            type="date"
+            value={occurredAt}
+            onChange={(e) => setOccurredAt(e.target.value)}
+            required
+            className="mt-1 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+          />
+          <p className="mt-1 max-w-[13rem] text-[10px] leading-relaxed text-slate-400">
+            É a data do fato, não a de hoje. Datas futuras entram como “previsto”.
+          </p>
+        </div>
+        <div>
+          <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+            Tipo
+          </label>
+          <select
+            value={kind}
+            onChange={(e) => setKind(e.target.value)}
+            className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none transition focus:border-indigo-400"
+          >
+            {TIMELINE_KIND_KEYS.map((k) => (
+              <option key={k} value={k}>
+                {TIMELINE_KIND[k].icon} {TIMELINE_KIND[k].label}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
+      <div>
+        <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+          O que aconteceu
+        </label>
+        <input
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          placeholder="Ex.: Alvará judicial expedido"
+          required
+          className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none transition placeholder:text-slate-300 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+        />
+      </div>
+
+      <div>
+        <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+          Detalhes <span className="font-normal normal-case tracking-normal">(opcional)</span>
+        </label>
+        <textarea
+          value={body}
+          onChange={(e) => setBody(e.target.value)}
+          rows={3}
+          placeholder="Contexto, próximos passos, o que isso muda para a família…"
+          className="mt-1 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-relaxed outline-none transition placeholder:text-slate-300 focus:border-indigo-400 focus:ring-2 focus:ring-indigo-100"
+        />
+      </div>
+
+      <div>
+        <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border-2 border-dashed border-slate-300 bg-white px-4 py-3 text-[11px] font-semibold text-slate-500 transition hover:border-indigo-300 hover:text-indigo-700">
+          <input
+            type="file"
+            multiple
+            className="hidden"
+            onChange={(e) => setFiles(Array.from(e.target.files ?? []))}
+          />
+          {files.length
+            ? `📎 ${files.length} arquivo(s): ${files.map((f) => f.name).join(", ")}`
+            : "📎 Anexar documentos (opcional, qualquer formato)"}
+        </label>
+        <p className="mt-1 text-[10px] text-slate-400">
+          Os anexos também ficam disponíveis na aba Documentos.
+        </p>
+      </div>
+
+      {err && <ErrorBox msg={err} />}
+
+      <div className="flex items-center gap-2">
+        <button
+          type="submit"
+          disabled={busy || !title.trim() || !occurredAt}
+          className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {busy ? "Salvando…" : entry ? "Salvar alterações" : "Registrar na linha do tempo"}
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={busy}
+          className="text-xs text-slate-500 transition hover:text-slate-800"
+        >
+          Cancelar
+        </button>
+      </div>
+    </form>
+  );
+}
+
 // ── Access log (admin) ──────────────────────────────────────────────
 const ACTION_LABEL: Record<string, string> = {
   CODE_SENT: "Código enviado (WhatsApp)",
@@ -2002,6 +2671,9 @@ const ACTION_LABEL: Record<string, string> = {
   DOC_UPLOAD_ERROR: "Falha no upload (S3)",
   DOC_DOWNLOAD: "Baixou documento",
   DOC_DELETE: "Excluiu documento",
+  TIMELINE_CREATE: "Registrou marco na linha do tempo",
+  TIMELINE_UPDATE: "Editou marco da linha do tempo",
+  TIMELINE_DELETE: "Excluiu marco da linha do tempo",
   EXTRATO_VIEW: "Consultou extrato",
   IMPERSONATE: "Admin viu como membro",
   RECEITA_CREATE: "Lançou receita",
