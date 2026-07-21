@@ -1,0 +1,13 @@
+name: inventario_analytics
+version: "1.0.0"
+profile: inventario
+
+model-paths: ["models"]
+test-paths: ["tests"]
+
+models:
+  inventario_analytics:
+    staging:
+      +materialized: view
+    marts:
+      +materialized: table

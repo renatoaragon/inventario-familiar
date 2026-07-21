@@ -1,0 +1,36 @@
+version: 2
+
+models:
+  - name: mart_reconciliation
+    description: "Per-receita conservation: gross vs shares + linked expenses. unaccounted_cents must be zero everywhere."
+    columns:
+      - name: receita_id
+        tests: [not_null, unique]
+      - name: gross_cents
+        tests: [not_null]
+      - name: unaccounted_cents
+        description: "Gross minus shares minus linked expenses. Anything other than 0 means money was lost or created."
+        tests:
+          - dbt_utils.accepted_range:
+              min_value: 0
+              max_value: 0
+
+  - name: mart_estate_cashflow
+    columns:
+      - name: month
+        tests: [not_null, unique]
+      - name: gross_cents
+        tests: [not_null]
+
+  - name: mart_heir_position
+    columns:
+      - name: member_id
+        tests: [not_null, unique]
+      - name: outstanding_cents
+        tests: [not_null]
+
+  - name: mart_estate_health
+    description: "Single-row estate snapshot."
+    columns:
+      - name: gross_received_cents
+        tests: [not_null]

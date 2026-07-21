@@ -1,0 +1,13 @@
+version: 2
+
+sources:
+  - name: raw
+    description: Inventory tables served by the app (Postgres, attached read-only).
+    database: pg
+    schema: public
+    tables:
+      - name: inventario_members
+      - name: inventario_receitas
+      - name: inventario_shares
+      - name: inventario_despesas
+      - name: inventario_repasses

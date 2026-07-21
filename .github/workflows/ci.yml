@@ -25,3 +25,42 @@ jobs:
         env:
           DATABASE_URL: postgresql://ci:ci@localhost:5432/ci
           AUTH_SECRET: ci-only
+
+  # Builds the analytics layer against a seeded Postgres and runs every dbt
+  # test, including the reconciliation gate: no receita may leave a cent
+  # unaccounted for. This is what proves the money maths, not just the app.
+  analytics:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: inventario
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Load schema and demo data
+        env:
+          PGPASSWORD: postgres
+        run: |
+          psql -h localhost -U postgres -d inventario -f scripts/init.sql
+          psql -h localhost -U postgres -d inventario -f scripts/seed-demo.sql
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dbt-duckdb
+        run: pip install "dbt-duckdb>=1.8,<1.9"
+      - name: dbt build (run + test, incl. reconciliation)
+        working-directory: analytics
+        run: |
+          cp profiles.yml.example profiles.yml
+          dbt deps
+          dbt build

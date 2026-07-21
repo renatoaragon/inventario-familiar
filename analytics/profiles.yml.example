@@ -1,0 +1,15 @@
+# Copy to profiles.yml (same folder) and fill in the Postgres connection.
+# DuckDB attaches the app's Postgres database read-only and materializes the
+# marts locally in inventario.duckdb, so analytics never loads the serving DB.
+inventario:
+  target: dev
+  outputs:
+    dev:
+      type: duckdb
+      path: inventario.duckdb
+      extensions:
+        - postgres
+      attach:
+        - path: "dbname=inventario host=localhost user=postgres password=postgres"
+          type: postgres
+          alias: pg
