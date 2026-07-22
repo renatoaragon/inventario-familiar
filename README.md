@@ -75,6 +75,10 @@ code (Members tab) or insert one directly while exploring locally.
   payouts cannot be silently recomputed).
 - **Storage**: S3 (SigV4 signing, no SDK dependency) with a base64 database
   fallback under 8MB.
+- **Analytics** ([analytics/](analytics/)): a dbt + DuckDB layer that attaches
+  Postgres read-only and builds financial marts (cash flow, per-heir position,
+  estate health) plus a **reconciliation gate** that fails CI if a single cent
+  goes unaccounted for. The product moves the money; this proves it adds up.
 
 ## Testing
 
@@ -82,6 +86,9 @@ code (Members tab) or insert one directly while exploring locally.
 npm run typecheck
 npm test   # vitest: the split engine (fees, leftover cents, expenses)
 ```
+
+The analytics layer is built and tested separately (dbt against a seeded
+Postgres, run in CI); see [analytics/README.md](analytics/README.md).
 
 ## License
 
