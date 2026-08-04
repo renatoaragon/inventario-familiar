@@ -80,6 +80,27 @@ code (Members tab) or insert one directly while exploring locally.
   estate health) plus a **reconciliation gate** that fails CI if a single cent
   goes unaccounted for. The product moves the money; this proves it adds up.
 
+## Design principles
+
+Inventário Familiar ships to a real family managing a real estate, but the data
+engineering inside holds to the same discipline as my portfolio work. The framework
+is incidental; what matters is that the money adds up and can be proven to.
+
+- **The money logic is pure and tested.** The split engine (lawyer's fee off the
+  top, expenses deducted, net split equally, leftover cents distributed
+  deterministically) is a pure function with a full test suite, verified in isolation
+  before it runs on a real balance.
+- **History is immutable.** Computed shares are stored as an immutable record, and an
+  entry that already has payouts cannot be silently recomputed. The numbers people
+  acted on stay the numbers of record.
+- **Reconciliation is a gate, not a report.** The dbt + DuckDB layer builds financial
+  marts and a check that fails CI if a single cent goes unaccounted for, the same
+  reconciliation discipline as
+  [dbt-duckdb-analytics](https://github.com/renatoaragon/dbt-duckdb-analytics). The
+  product moves the money; the analytics proves it balances.
+- **Every action is audited.** Logins, downloads, entries and admin impersonation are
+  recorded. In a system about who is owed what, the trail is part of the correctness.
+
 ## Testing
 
 ```bash
